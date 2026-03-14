@@ -8,158 +8,128 @@ data_directory = joinpath(dirname(pathof(XD)), "..", "data")
 
 @assert isdir(data_directory)
 
-@testset "Simple decrypt" begin
+@testset "Basic functionality" begin
     test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
     io=XD.decrypt_xlsx(test_file, raw"w23$er3")
+    test_file2 = joinpath(data_directory, raw"password-is-very$long^password#3245301!.xlsx")
+    io2=XD.decrypt_xlsx(test_file2, raw"very$long^password#3245301!")
 
     @testset "number formats" begin
         XLSX.openxlsx(io) do f
             show(IOBuffer(), f)
-            sheet = f["general"]
-            @test sheet["A1"] == "text"
-            @test sheet["B1"] == "regular text"
-            @test sheet["A2"] == "integer"
-            @test sheet["B2"] == 102
-            @test sheet["A3"] == "float"
-            @test isapprox(sheet["B3"], 102.2)
-            @test sheet["A4"] == "date"
-            @test sheet["B4"] == Date(1983, 4, 16)
-            @test sheet["A5"] == "hour"
-            @test sheet["B5"] == Dates.Time(Dates.Hour(19), Dates.Minute(45))
-            @test sheet["A6"] == "datetime"
-            @test sheet["B6"] == Date(2018, 4, 16) + Dates.Time(Dates.Hour(19), Dates.Minute(19), Dates.Second(51))
-            @test f["general!B7"] == -220.0
-            @test f["general!B8"] == -2000
-            @test f["general!B9"] == 100000000000000
-            @test f["general!B10"] == -100000000000000
+            sheet = f["Sheet1"]
+            @test sheet["A1"] == 1
+            @test isapprox(sheet["B1"], 0.546832775750823)
+            @test sheet["C1"] == "kjghfjvila"
+            @test sheet["A2"] == 2
+            @test isapprox(sheet["B2"], 0.381845788463574)
+            @test sheet["C2"] == "ghfjkqwefg"
+            @test isapprox(sheet["B3"], 0.541686223027816)
+
+            @test sheet["A5"] == 10
+            @test isapprox(sheet["B5"], 1.78799032829419)
+            @test isapprox(f["Sheet2!B3"], 0.541686223027816)
+            @test f["Sheet2!C3"] == "fhlAWETYUUI"
+            @test isapprox(f["Sheet2!B4"], 0.317625541051977)
+            @test f["Sheet2!C4"] == "HFJuwe"
+        end
+        XLSX.openxlsx(io2) do f
+            show(IOBuffer(), f)
+            sheet = f["Sheet1"]
+            @test sheet["A1"] == 1
+            @test isapprox(sheet["B1"], 0.546832775750823)
+            @test sheet["C1"] == "kjghfjvila"
+            @test sheet["A2"] == 2
+            @test isapprox(sheet["B2"], 0.381845788463574)
+            @test sheet["C2"] == "ghfjkqwefg"
+            @test isapprox(sheet["B3"], 0.541686223027816)
+
+            @test sheet["A5"] == 10
+            @test isapprox(sheet["B5"], 1.78799032829419)
+            @test isapprox(f["Sheet2!B3"], 0.541686223027816)
+            @test f["Sheet2!C3"] == "fhlAWETYUUI"
+            @test isapprox(f["Sheet2!B4"], 0.317625541051977)
+            @test f["Sheet2!C4"] == "HFJuwe"
         end
     end
 
-    @testset "Defined Names" begin # Issue #148
+    @testset "Defined Names" begin
+
         seekstart(io) 
-        f = XLSX.opentemplate(io)
-        @test f["SINGLE_CELL"] == "single cell A2"
-        @test f["RANGE_B4C5"] == Any["range B4:C5" "range B4:C5"; "range B4:C5" "range B4:C5"]
-        @test f["CONST_DATE"] == 43383
-        @test isapprox(f["CONST_FLOAT"], 10.2)
-        @test f["CONST_INT"] == 100
-        @test f["LOCAL_INT"] == 2000
-        @test f["named_ranges_2"]["LOCAL_INT"] == 2000
-        @test f["named_ranges"]["LOCAL_INT"] == 1000
-        @test f["named_ranges"]["LOCAL_NAME"] == "Hey You"
-        @test f["named_ranges_2"]["LOCAL_NAME"] == "out there in the cold"
-        @test f["named_ranges"]["SINGLE_CELL"] == "single cell A2"
-
-        @test_throws XLSX.XLSXError f["header_error"]["LOCAL_REF"]
-        @test f["named_ranges"]["LOCAL_REF"][1] == 10
-        @test f["named_ranges"]["LOCAL_REF"][2] == 20
-        @test f["named_ranges_2"]["LOCAL_REF"][1] == "local"
-        @test f["named_ranges_2"]["LOCAL_REF"][2] == "reference"
-
-        XLSX.addDefinedName(f["lookup"], "Life_the_Universe_and_Everything", 42)
-        XLSX.addDefinedName(f["lookup"], "FirstName", "Hello World")
-        XLSX.addDefinedName(f["lookup"], "single", "C2"; absolute=true)
-        XLSX.addDefinedName(f["lookup"], "range", "C3:C5"; absolute=true)
-        XLSX.addDefinedName(f["lookup"], "NonContig", "C3:C5,D3:D5"; absolute=true)
-        @test f["lookup"]["Life_the_Universe_and_Everything"] == 42
-        @test f["lookup"]["FirstName"] == "Hello World"
-        @test f["lookup"]["single"] == "NAME"
-        @test f["lookup"]["range"] == Any["name1"; "name2"; "name3";;] # A 2D Array, size (3, 1)
-        @test f["lookup"]["NonContig"] == [["name1"; "name2"; "name3";;], [100; 200; 300;;]] # NonContiguousRanges return a vector of matrices
-
-        XLSX.addDefinedName(f, "Life_the_Universe_and_Everything", 42)
-        XLSX.addDefinedName(f, "FirstName", "Hello World")
-        XLSX.addDefinedName(f, "single", "lookup!C2"; absolute=true)
-        XLSX.addDefinedName(f, "range", "lookup!C3:C5"; absolute=true)
-        XLSX.addDefinedName(f, "NonContig", "lookup!C3:C5,lookup!D3:D5"; absolute=true)
-        @test f["Life_the_Universe_and_Everything"] == 42
-        @test f["FirstName"] == "Hello World"
-        @test f["single"] == "NAME"
-        @test f["range"] == Any["name1"; "name2"; "name3";;] # A 2D Array, size (3, 1)
-        @test f["NonContig"] == [["name1"; "name2"; "name3";;], [100; 200; 300;;]] # NonContiguousRanges return a vector of matrices
-
-        XLSX.setFont(f["lookup"], "NonContig"; name="Arial", size=12, color="FF0000FF", bold=true, italic=true, under="single", strike=true)
-        @test XLSX.getFont(f["lookup"], "C3").font == Dict("i" => nothing, "b" => nothing, "u" => nothing, "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-        @test XLSX.getFont(f["lookup"], "C4").font == Dict("i" => nothing, "b" => nothing, "u" => nothing, "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-        @test XLSX.getFont(f["lookup"], "C5").font == Dict("i" => nothing, "b" => nothing, "u" => nothing, "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-        @test XLSX.getFont(f["lookup"], "D3").font == Dict("i" => nothing, "b" => nothing, "u" => nothing, "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-        @test XLSX.getFont(f["lookup"], "D4").font == Dict("i" => nothing, "b" => nothing, "u" => nothing, "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-        @test XLSX.getFont(f["lookup"], "D5").font == Dict("i" => nothing, "b" => nothing, "u" => nothing, "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-        XLSX.setFont(f, "single"; name="Arial", size=12, color="FF0000FF", bold=true, italic=true, under="double", strike=true)
-        @test XLSX.getFont(f["lookup"], "C2").font == Dict("i" => nothing, "b" => nothing, "u" => Dict("val" => "double"), "strike" => nothing, "sz" => Dict("val" => "12"), "name" => Dict("val" => "Arial"), "color" => Dict("rgb" => "FF0000FF"))
-
-        XLSX.writexlsx("mytest.xlsx", f, overwrite=true)
-
-        f = XLSX.readxlsx("mytest.xlsx")
-        @test f["Life_the_Universe_and_Everything"] == 42
-        @test f["FirstName"] == "Hello World"
-        @test f["single"] == "NAME"
-        @test f["range"] == Any["name1"; "name2"; "name3";;] # A 2D Array, size (3, 1)
-        @test f["NonContig"] == [["name1"; "name2"; "name3";;], [100; 200; 300;;]] # NonContiguousRanges return a vector of matrices
-        isfile("mytest.xlsx") && rm("mytest.xlsx")
-
-
-    end
-
-    @testset "ReferencedFormulae" begin
-
-        test_file = joinpath(data_directory, raw"password-is-very$long^password#3245301!.xlsx")
-        io=XD.decrypt_xlsx(test_file, raw"very$long^password#3245301!")
         f = XLSX.openxlsx(io, mode="rw")
+        s = f["Sheet2"]
+        @test all(isapprox.(s["Floats"], [0.546832775750823; 0.381845788463574; 0.541686223027816; 0.317625541051977;;]))
+        @test s["SortedStrings"] == Any["fhlAWETYUUI"; "ghfjkqwefg"; "HFJuwe"; "kjghfjvila";;]
 
-        s = f[1]
-        wb = XLSX.get_workbook(s)
-        @test XLSX.getcell(s, "A2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A2"), "", "", "20", "", true)
-        @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A2")) == XLSX.ReferencedFormula("SUM(O2:S2)", 0, "A2:A10", nothing)
-        @test XLSX.getcell(s, "A3") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A3"), "", "", "25", "", true)
-        @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A3")) == XLSX.FormulaReference(0, nothing)
-        s["A2"] = 3
-        @test XLSX.getcell(s, "A2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A2"), "", "", "3", "", false)
-        @test XLSX.getcell(s, "A3") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A3"), "", "", "25", "", true)
-        @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A3")) == XLSX.ReferencedFormula("SUM(O3:S3)", 0, "A3:A10", nothing)
-        @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A4")) == XLSX.FormulaReference(0, nothing)
-        
-        s2 = f[2]
-        @test XLSX.getcell(s2, "A1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A1"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A1")) == XLSX.Formula("SECOND(NOW())", nothing, nothing, Dict("ca" => "1"))
-        @test XLSX.getcell(s2, "A2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A2"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A2")) == XLSX.ReferencedFormula("SECOND(NOW())", 1, "A2:A5", Dict("ca" => "1"))
-        s2["A2"] = 3
-        @test XLSX.getcell(s2, "A2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A2"), "", "", "3", "", false)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A3")).id == 1
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A3")).unhandled == Dict("ca" => "1")
-        @test XLSX.getcell(s2, "A3").formula == true
-        @test XLSX.getcell(s2, "A3") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A3"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A3")) == XLSX.ReferencedFormula("SECOND(NOW())", 1, "A3:A5", Dict("ca" => "1"))
-        @test XLSX.getcell(s2, "B1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("B1"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("B1")) == XLSX.ReferencedFormula("SECOND(NOW())", 0, "B1:C5", Dict("ca" => "1"))
-        s2["B1"] = 3
-        @test XLSX.getcell(s2, "B1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("B1"), "", "", "3", "", false)
-        @test XLSX.getcell(s2, "B2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("B2"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("B2")) == XLSX.ReferencedFormula("SECOND(NOW())", 0, "B2:C5", Dict("ca" => "1"))
-        @test XLSX.getcell(s2, "C1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("C1"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("C1")) == XLSX.Formula("SECOND(NOW())", nothing, "C1", Dict("ca" => "1"))
+        seekstart(io2) 
+        f = XLSX.openxlsx(io2, mode="rw")
+        s = f["Sheet2"]
+        @test all(isapprox.(s["Floats"], [0.546832775750823; 0.381845788463574; 0.541686223027816; 0.317625541051977;;]))
+        @test s["SortedStrings"] == Any["fhlAWETYUUI"; "ghfjkqwefg"; "HFJuwe"; "kjghfjvila";;]
 
-        XLSX.writexlsx("mytest.xlsx", f, overwrite=true)
-        f2 = XLSX.openxlsx("mytest.xlsx", mode="rw")
-
-        s = f2[1]
-        @test XLSX.getcell(s, "A2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A2"), "", "", "3", "", false)
-        @test XLSX.getcell(s, "A3") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A3"), "", "", "25", "", true)
-        @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A3")) == XLSX.ReferencedFormula("SUM(O3:S3)", 0, "A3:A10", nothing)
-
-        s2 = f[2]
-        @test XLSX.getcell(s2, "A2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A2"), "", "", "3", "", false)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A3")).id == 1
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A3")).unhandled == Dict("ca" => "1")
-        @test XLSX.getcell(s2, "A3") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A3"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("A3")) == XLSX.ReferencedFormula("SECOND(NOW())", 1, "A3:A5", Dict("ca" => "1"))
-        @test XLSX.getcell(s2, "B1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("B1"), "", "", "3", "", false)
-        @test XLSX.getcell(s2, "B2") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("B2"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("B2")) == XLSX.ReferencedFormula("SECOND(NOW())", 0, "B2:C5", Dict("ca" => "1"))
-        @test XLSX.getcell(s2, "C1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("C1"), "", "", "1", "", true)
-        @test XLSX.get_formula_from_cache(s2, XLSX.CellRef("C1")) ==XLSX.Formula("SECOND(NOW())", nothing, "C1", Dict("ca" => "1"))
-
-        isfile("mytest.xlsx") && rm("mytest.xlsx")
     end
 end
+
+v= pkgversion(XLSX)
+if (v.major, v.minor) >= (0, 11)
+
+    @testset "Newer functionality" begin
+
+        test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
+        io=XD.decrypt_xlsx(test_file, raw"w23$er3")
+        f = XLSX.openxlsx(io, mode="rw")
+        test_file = joinpath(data_directory, raw"password-is-very$long^password#3245301!.xlsx")
+        io=XD.decrypt_xlsx(test_file, raw"very$long^password#3245301!")
+        f2 = XLSX.openxlsx(io, mode="rw")
+
+        @testset "formulas" begin
+            s = f[1]
+            wb = XLSX.get_workbook(s)
+            @test XLSX.getcell(s, "A5") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A5"), "", "13", "10", "", true)
+            @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A5")) == XLSX.Formula("SUM(A1:A4)", nothing, nothing, nothing)
+            @test XLSX.getcell(s, "D1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("D1"), "s", "6", "2", "1", true)
+            @test XLSX.get_formula_from_cache(s, XLSX.CellRef("D1")) == XLSX.Formula("_xlfn._xlws.SORT(C1:C4)", "array", "D1:D4", nothing)
+
+            s = f2[1]
+            wb = XLSX.get_workbook(s)
+            wb = XLSX.get_workbook(s)
+            @test XLSX.getcell(s, "A5") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A5"), "", "13", "10", "", true)
+            @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A5")) == XLSX.Formula("SUM(A1:A4)", nothing, nothing, nothing)
+            @test XLSX.getcell(s, "D1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("D1"), "s", "6", "2", "1", true)
+            @test XLSX.get_formula_from_cache(s, XLSX.CellRef("D1")) == XLSX.Formula("_xlfn._xlws.SORT(C1:C4)", "array", "D1:D4", nothing)
+        end
+
+        @testset "formatting" begin
+
+            s = f[1]
+            @test XLSX.getFont(s, "A1").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("rgb" => "FF006100"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFont(s, "B2").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("rgb" => "FF9C5700"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFont(s, "C3").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("rgb" => "FF9C0006"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFont(s, "D4").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("theme" => "1"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFill(s, "D2").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFFFFFCC"))
+            @test XLSX.getFill(s, "C3").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFFFC7CE"))
+            @test XLSX.getFill(s, "B4").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFFFEB9C"))
+            @test XLSX.getFill(s, "A5").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFF2F2F2"))
+            @test XLSX.getBorder(s, "A5").border == Dict("left" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "bottom" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "right" => Dict("rgb" => "FF7F7F7F", "style" => "thin"), "top" => Dict("rgb" => "FF7F7F7F", "style" => "double"), "diagonal" => nothing)
+            @test XLSX.getBorder(s, "B5").border == Dict("left" => Dict("rgb" => "FF7F7F7F", "style" => "thin"), "bottom" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "right" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "top" => Dict("rgb" => "FF7F7F7F", "style" => "double"), "diagonal" => nothing)
+            @test XLSX.getBorder(s, "C2").border == Dict("left" => Dict("indexed" => "64", "style" => "thin"), "bottom" => Dict("indexed" => "64", "style" => "thin"), "right" => Dict("indexed" => "64", "style" => "thin"), "top" => Dict("indexed" => "64", "style" => "thin"), "diagonal" => nothing)
+            @test XLSX.getBorder(s, "D1").border == Dict("left" => Dict("indexed" => "64", "style" => "thin"), "bottom" => Dict("indexed" => "64", "style" => "thin"), "right" => Dict("indexed" => "64", "style" => "medium"), "top" => Dict("indexed" => "64", "style" => "medium"), "diagonal" => nothing)
+
+            s = f2[1]
+            @test XLSX.getFont(s, "A1").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("rgb" => "FF006100"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFont(s, "B2").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("rgb" => "FF9C5700"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFont(s, "C3").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("rgb" => "FF9C0006"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFont(s, "D4").font == Dict("name" => Dict("val" => "Aptos Narrow"), "family" => Dict("val" => "2"), "sz" => Dict("val" => "11"), "color" => Dict("theme" => "1"), "scheme" => Dict("val" => "minor"))
+            @test XLSX.getFill(s, "D2").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFFFFFCC"))
+            @test XLSX.getFill(s, "C3").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFFFC7CE"))
+            @test XLSX.getFill(s, "B4").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFFFEB9C"))
+            @test XLSX.getFill(s, "A5").fill == Dict("patternFill" => Dict("patternType" => "solid", "fgrgb" => "FFF2F2F2"))
+            @test XLSX.getBorder(s, "A5").border == Dict("left" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "bottom" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "right" => Dict("rgb" => "FF7F7F7F", "style" => "thin"), "top" => Dict("rgb" => "FF7F7F7F", "style" => "double"), "diagonal" => nothing)
+            @test XLSX.getBorder(s, "B5").border == Dict("left" => Dict("rgb" => "FF7F7F7F", "style" => "thin"), "bottom" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "right" => Dict("rgb" => "FF7F7F7F", "style" => "thick"), "top" => Dict("rgb" => "FF7F7F7F", "style" => "double"), "diagonal" => nothing)
+            @test XLSX.getBorder(s, "C2").border == Dict("left" => Dict("indexed" => "64", "style" => "thin"), "bottom" => Dict("indexed" => "64", "style" => "thin"), "right" => Dict("indexed" => "64", "style" => "thin"), "top" => Dict("indexed" => "64", "style" => "thin"), "diagonal" => nothing)
+            @test XLSX.getBorder(s, "D1").border == Dict("left" => Dict("indexed" => "64", "style" => "thin"), "bottom" => Dict("indexed" => "64", "style" => "thin"), "right" => Dict("indexed" => "64", "style" => "medium"), "top" => Dict("indexed" => "64", "style" => "medium"), "diagonal" => nothing)
+
+        end
+    end
+end
+

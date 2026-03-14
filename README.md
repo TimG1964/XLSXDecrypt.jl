@@ -26,3 +26,5 @@ XLSXFile("IOBuffer(data=UInt8[...], readable=true, writable=false, seekable=true
 -------------------------------------------------
                Sheet1 3x1           A1:A3
 ```
+
+Only the modern ECMA-376 Agile Encryption scheme (Excel 2010+) is supported.
