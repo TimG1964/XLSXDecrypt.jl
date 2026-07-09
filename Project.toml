@@ -1,7 +1,7 @@
 name = "XLSXDecrypt"
 uuid = "e3fae58b-f948-45ca-982d-29fa61c37f2f"
 license = "MIT"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Tim Gebbels <timgbbels@gmail.com>"]
 repo = "https://github.com/TimG1964/XLSXDecrypt.jl.git"
 description = "Access password protected .xlsx files"
@@ -16,15 +16,5 @@ XML = "72c71f33-b9b6-44de-8c94-c961784809e2"
 Base64 = "1"
 Nettle = "1"
 SHA = "0.7"
-XML = "0.3"
-XLSX = "0.10 - 0.11"
-julia = "1.9 - 1"
-
-[extras]
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
-Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
-
-
-[targets]
-test = ["XLSX", "Dates", "Test"]
+XML = "0.3 - 0.4"
+julia = "1.9"
