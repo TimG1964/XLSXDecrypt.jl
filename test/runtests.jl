@@ -2,7 +2,7 @@ import XLSX
 import XLSXDecrypt as XD
 using Test
 using Dates
-
+using SHA
 
 data_directory = joinpath(dirname(pathof(XD)), "..", "data")
 
@@ -87,7 +87,8 @@ if (v.major, v.minor) >= (0, 11)
             wb = XLSX.get_workbook(s)
             @test XLSX.getcell(s, "A5") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A5"), "", "13", "10", "", true)
             @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A5")) == XLSX.Formula("SUM(A1:A4)", nothing, nothing, nothing)
-            @test XLSX.getcell(s, "D1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("D1"), "s", "6", "2", "1", true)
+            @test XLSX.getcell(s, "D1").style == 6
+            @test s["D1"] == "fhlAWETYUUI"
             @test XLSX.get_formula_from_cache(s, XLSX.CellRef("D1")) == XLSX.Formula("_xlfn._xlws.SORT(C1:C4)", "array", "D1:D4", nothing)
 
             s = f2[1]
@@ -95,7 +96,8 @@ if (v.major, v.minor) >= (0, 11)
             wb = XLSX.get_workbook(s)
             @test XLSX.getcell(s, "A5") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("A5"), "", "13", "10", "", true)
             @test XLSX.get_formula_from_cache(s, XLSX.CellRef("A5")) == XLSX.Formula("SUM(A1:A4)", nothing, nothing, nothing)
-            @test XLSX.getcell(s, "D1") == XLSX.Cell(XLSX.get_workbook(f), XLSX.CellRef("D1"), "s", "6", "2", "1", true)
+            @test XLSX.getcell(s, "D1").style == 6
+            @test s["D1"] == "fhlAWETYUUI"
             @test XLSX.get_formula_from_cache(s, XLSX.CellRef("D1")) == XLSX.Formula("_xlfn._xlws.SORT(C1:C4)", "array", "D1:D4", nothing)
         end
 
@@ -133,3 +135,94 @@ if (v.major, v.minor) >= (0, 11)
     end
 end
 
+@testset "Error handling" begin
+    test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
+
+    @testset "wrong password" begin
+        @test_throws ErrorException XD.decrypt_xlsx(test_file, "definitely-wrong")
+    end
+
+    @testset "not a CFB file" begin
+        # any plain file, e.g. a non-encrypted xlsx or this test file itself
+        bad_file = joinpath(@__DIR__, "runtests.jl")
+        @test_throws ErrorException XD.decrypt_xlsx(bad_file, "irrelevant")
+    end
+
+    @testset "file does not exist" begin
+        @test_throws SystemError XD.decrypt_xlsx(joinpath(data_directory, "nope.xlsx"), "x")
+    end
+end
+
+@testset "Internal helpers" begin
+    @testset "uint32le" begin
+        @test XD.uint32le(UInt32(1)) == UInt8[0x01, 0x00, 0x00, 0x00]
+        @test XD.uint32le(UInt32(256)) == UInt8[0x00, 0x01, 0x00, 0x00]
+        @test XD.uint32le(UInt32(0)) == UInt8[0x00, 0x00, 0x00, 0x00]
+    end
+
+    @testset "is_special" begin
+        @test XD.is_special(XD.ENDOFCHAIN)
+        @test XD.is_special(XD.FREESECT)
+        @test XD.is_special(XD.FATSECT)
+        @test XD.is_special(XD.DIFSECT)
+        @test !XD.is_special(UInt32(0))
+        @test !XD.is_special(UInt32(1_000_000))
+    end
+
+    @testset "derive_key is deterministic" begin
+        salt = rand(UInt8, 16)
+        bk   = UInt8[0x14,0x6e,0x0b,0xe7,0xab,0xac,0xd0,0xd6]
+        k1 = XD.derive_key("password", salt, 100, "SHA512", 256, bk)
+        k2 = XD.derive_key("password", salt, 100, "SHA512", 256, bk)
+        @test k1 == k2
+        @test length(k1) == 32  # 256 bits
+
+        # different password -> different key
+        k3 = XD.derive_key("different", salt, 100, "SHA512", 256, bk)
+        @test k1 != k3
+    end
+
+    @testset "derive_key respects key_bits" begin
+        salt = rand(UInt8, 16)
+        bk   = UInt8[0x14,0x6e,0x0b,0xe7,0xab,0xac,0xd0,0xd6]
+        @test length(XD.derive_key("pw", salt, 10, "SHA1", 128, bk)) == 16
+        @test length(XD.derive_key("pw", salt, 10, "SHA256", 256, bk)) == 32
+    end
+end
+
+@testset "get_hash_fn" begin
+    @test XD.get_hash_fn("SHA512") === SHA.sha512
+    @test XD.get_hash_fn("SHA256") === SHA.sha256
+    @test XD.get_hash_fn("SHA1")   === SHA.sha1
+    @test XD.get_hash_fn("SHA384") === SHA.sha384
+    @test_throws ErrorException XD.get_hash_fn("MD5")
+end
+
+@testset "returned buffer is fresh/seekable" begin
+    test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
+    io = XD.decrypt_xlsx(test_file, raw"w23$er3")
+    @test position(io) == 0
+    bytes1 = read(io)
+    seekstart(io)
+    bytes2 = read(io)
+    @test bytes1 == bytes2
+end
+
+@testset "non-BMP UTF-16 password (emoji)" begin
+    test_file = joinpath(data_directory, "password-is-😀🙂🚲.xlsx")
+    password  = "😀🙂🚲"
+
+    @test isfile(test_file)
+
+    io = XD.decrypt_xlsx(test_file, password)
+    @test io isa IOBuffer
+
+    XLSX.openxlsx(io) do f
+        sheet = f["Sheet1"]
+        @test sheet["A1"] !== missing
+    end
+
+    @testset "wrong emoji password rejected" begin
+        @test_throws ErrorException XD.decrypt_xlsx(test_file, "😀🙂🚗")
+    end
+end
