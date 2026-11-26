@@ -433,6 +433,40 @@ end
         @test read(XD.decrypt_xlsx(inplace, "pw")) == bytes
     end
 
+    @testset "IO input position" begin
+        plain = joinpath(tmp, "plain.xlsx")
+        bytes = read(plain)
+        enc   = joinpath(tmp, "io_pos.xlsx")
+
+        # IOBuffer just written to (position at end): read from the start, no seekstart needed
+        buf = IOBuffer(); write(buf, bytes)
+        @test position(buf) == length(bytes)
+        XD.encrypt_xlsx(buf, enc, "pw"; spin_count=10)
+        @test read(XD.decrypt_xlsx(enc, "pw")) == bytes
+
+        # IOStream part-way through: also read from the start
+        open(plain) do io
+            read(io, 100)
+            XD.encrypt_xlsx(io, enc, "pw"; spin_count=10)
+        end
+        @test read(XD.decrypt_xlsx(enc, "pw")) == bytes
+
+        # Non-seekable stream: read from its current position
+        pipe = PipeBuffer(); write(pipe, UInt8[0xff, 0xff]); write(pipe, bytes)
+        read(pipe, 2)
+        XD.encrypt_xlsx(pipe, enc, "pw"; spin_count=10)
+        @test read(XD.decrypt_xlsx(enc, "pw")) == bytes
+
+        # XLSX.jl workbook written straight to an IOBuffer, no rewind
+        xf  = XLSX.openxlsx(XD.decrypt_xlsx(FIXTURES[1]...), mode="rw")
+        xf[1]["E2"] = "in memory"
+        buf = IOBuffer(); XLSX.writexlsx(buf, xf)
+        XD.encrypt_xlsx(buf, enc, "pw"; spin_count=10)
+        XLSX.openxlsx(XD.decrypt_xlsx(enc, "pw")) do f
+            @test f[1]["E2"] == "in memory"
+        end
+    end
+
     @testset "fresh salts and keys every time" begin
         bytes = read(joinpath(tmp, "plain.xlsx"))
         o1, o2 = IOBuffer(), IOBuffer()

@@ -70,6 +70,35 @@ julia> encrypt_xlsx("plain.xlsx", "protected.xlsx", "secret")
 julia> XLSX.readxlsx(decrypt_xlsx("protected.xlsx", "secret"))
 ```
 
+A workbook built with XLSX.jl can be encrypted without ever writing a plaintext
+copy to disk, by saving it to an `IOBuffer` first. There is no need to rewind
+the buffer: `encrypt_xlsx` always reads a seekable `IO` from the start.
+
+```julia
+julia> xf = XLSX.newxlsx()       # XLSX.jl v0.11+; or any workbook opened with mode="w" or "rw"
+
+julia> xf[1]["A1"] = "confidential"
+
+julia> buf = IOBuffer()
+
+julia> XLSX.writexlsx(buf, xf)
+
+julia> encrypt_xlsx(buf, "protected.xlsx", "secret")
+```
+
+The same works for a workbook that was itself decrypted, edited and is being
+saved again, all in memory:
+
+```julia
+julia> xf = XLSX.openxlsx(decrypt_xlsx("protected.xlsx", "secret"), mode="rw")
+
+julia> xf[1]["A2"] = "more"
+
+julia> buf = IOBuffer(); XLSX.writexlsx(buf, xf)
+
+julia> encrypt_xlsx(buf, "protected.xlsx", "secret")
+```
+
 A decrypted buffer can be re-encrypted directly, e.g. to change a password:
 
 ```julia
