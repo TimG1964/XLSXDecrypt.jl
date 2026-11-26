@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Drop support for Julia v1.9 (its binaries no longer run on current Ubuntu CI runners); minimum is now v1.10 (LTS)
 - Move test fixtures into `test/data`
+- Internal: restructure crypto helpers (shared AES-CBC, HMAC, key derivation and package segment cipher) in preparation for encryption support
 
 ## [v0.1.1](https://github.com/TimG1964/XLSXDecrypt.jl/tree/v0.1.0) - 2026-07-09
 
