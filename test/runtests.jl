@@ -4,17 +4,17 @@ using Test
 using Dates
 using SHA
 
-data_directory = joinpath(dirname(pathof(XD)), "..", "data")
+data_directory = joinpath(dirname(pathof(XD)), "..", "test", "data")
 
 @assert isdir(data_directory)
 
-@testset "Basic functionality" begin
+@testset "Basic functionality              " begin
     test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
     io=XD.decrypt_xlsx(test_file, raw"w23$er3")
     test_file2 = joinpath(data_directory, raw"password-is-very$long^password#3245301!.xlsx")
     io2=XD.decrypt_xlsx(test_file2, raw"very$long^password#3245301!")
 
-    @testset "number formats" begin
+    @testset "number formats               " begin
         XLSX.openxlsx(io) do f
             show(IOBuffer(), f)
             sheet = f["Sheet1"]
@@ -53,7 +53,7 @@ data_directory = joinpath(dirname(pathof(XD)), "..", "data")
         end
     end
 
-    @testset "Defined Names" begin
+    @testset "Defined Names                " begin
 
         seekstart(io) 
         f = XLSX.openxlsx(io, mode="rw")
@@ -73,7 +73,7 @@ end
 v= pkgversion(XLSX)
 if (v.major, v.minor) >= (0, 11)
 
-    @testset "Newer functionality" begin
+    @testset "Newer functionality              " begin
 
         test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
         io=XD.decrypt_xlsx(test_file, raw"w23$er3")
@@ -135,7 +135,7 @@ if (v.major, v.minor) >= (0, 11)
     end
 end
 
-@testset "Error handling" begin
+@testset "Error handling                   " begin
     test_file = joinpath(data_directory, raw"password-is-w23$er3.xlsx")
 
     @testset "wrong password" begin
@@ -153,7 +153,7 @@ end
     end
 end
 
-@testset "Internal helpers" begin
+@testset "Internal helpers                 " begin
     @testset "uint32le" begin
         @test XD.uint32le(UInt32(1)) == UInt8[0x01, 0x00, 0x00, 0x00]
         @test XD.uint32le(UInt32(256)) == UInt8[0x00, 0x01, 0x00, 0x00]
@@ -190,7 +190,7 @@ end
     end
 end
 
-@testset "get_hash_fn" begin
+@testset "get_hash_fn                      " begin
     @test XD.get_hash_fn("SHA512") === SHA.sha512
     @test XD.get_hash_fn("SHA256") === SHA.sha256
     @test XD.get_hash_fn("SHA1")   === SHA.sha1
@@ -208,7 +208,7 @@ end
     @test bytes1 == bytes2
 end
 
-@testset "non-BMP UTF-16 password (emoji)" begin
+@testset "non-BMP UTF-16 password (emoji)  " begin
     test_file = joinpath(data_directory, "password-is-😀🙂🚲.xlsx")
     password  = "😀🙂🚲"
 
