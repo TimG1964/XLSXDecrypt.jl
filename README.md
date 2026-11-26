@@ -25,13 +25,18 @@ julia> Pkg.add("XLSXDecrypt")
 
 ## Usage
 
-This package offers only one public function:
+This package offers two public functions:
 
 ```julia
     decrypt_xlsx(filename::String, password::String)
+    encrypt_xlsx(input, output, password::AbstractString; spin_count = 100_000)
 ```
 
-This returns an `IOBuffer` that either `XLSX.readxlsx` or `XLSX.openxlsx` can ingest.
+### Decrypting
+
+`decrypt_xlsx`
+
+returns an `IOBuffer` that either `XLSX.readxlsx` or `XLSX.openxlsx` can ingest.
 
 Thus:
 
@@ -45,6 +50,30 @@ XLSXFile("IOBuffer(data=UInt8[...], readable=true, writable=false, seekable=true
             sheetname size          range
 -------------------------------------------------
                Sheet1 3x1           A1:A3
+```
+
+### Encrypting
+
+`encrypt_xlsx` password-protects an `.xlsx` file so that Excel will prompt for the
+password when opening it. `input` may be a file path, a byte vector or an `IO`;
+`output` may be a file path or an `IO` (and may be the same path as `input`).
+Encryption uses the same scheme and settings as Excel (AES-256, SHA-512,
+100,000 key-derivation iterations).
+
+```julia
+julia> using XLSXDecrypt, XLSX
+
+julia> XLSX.writexlsx("plain.xlsx", f, overwrite=true)
+
+julia> encrypt_xlsx("plain.xlsx", "protected.xlsx", "secret")
+
+julia> XLSX.readxlsx(decrypt_xlsx("protected.xlsx", "secret"))
+```
+
+A decrypted buffer can be re-encrypted directly, e.g. to change a password:
+
+```julia
+julia> encrypt_xlsx(decrypt_xlsx("protected.xlsx", "secret"), "protected.xlsx", "new secret")
 ```
 
 Only the modern ECMA-376 Agile Encryption scheme (Excel 2010+) is supported.

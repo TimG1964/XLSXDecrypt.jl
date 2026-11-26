@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Drop support for Julia v1.9 (its binaries no longer run on current Ubuntu CI runners); minimum is now v1.10 (LTS)
 - Move test fixtures into `test/data`
 - Internal: restructure crypto helpers (shared AES-CBC, HMAC, key derivation and package segment cipher) in preparation for encryption support
+- Add `encrypt_xlsx(input, output, password; spin_count)` to password-protect `.xlsx` files with ECMA-376 Agile Encryption (AES-256/SHA-512, as Excel), including a minimal CFB (OLE2) writer and the `dataIntegrity` HMAC
+- New dependency: `Random` (stdlib), for cryptographically secure keys and salts
 
 ## [v0.1.1](https://github.com/TimG1964/XLSXDecrypt.jl/tree/v0.1.0) - 2026-07-09
 

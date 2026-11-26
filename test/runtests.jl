@@ -3,6 +3,7 @@ import XLSXDecrypt as XD
 using Test
 using Dates
 using SHA
+using Random
 
 data_directory = joinpath(dirname(pathof(XD)), "..", "test", "data")
 
@@ -269,10 +270,269 @@ end
         @test XD.crypt_package(key, p, ct; encrypt=false)[1:length(data)] == data
     end
 
+    @testset "derive_keys threaded == serial" begin
+        p = (enc_key_salt = rand(UInt8, 16), spin_count = 50, enc_hash_alg = "SHA512", enc_key_bits = 256)
+        @test XD.derive_keys("pw", p; threaded=true) == XD.derive_keys("pw", p; threaded=false)
+    end
+
+    @testset "derive_key pads short hashes with 0x36" begin
+        bk = XD.BLOCK_KEY_VALUE
+        k  = XD.derive_key("pw", rand(UInt8, 16), 10, "SHA1", 256, bk)  # SHA1 = 20 bytes < 32
+        @test length(k) == 32
+        @test all(==(0x36), k[21:32])
+    end
+
     @testset "HMAC (RFC 4231 test case 2)" begin
         mac = XD.hmac("SHA256", Vector{UInt8}("Jefe"), Vector{UInt8}("what do ya want for nothing?"))
         @test mac == hex2bytes("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
         @test length(XD.hmac("SHA512", rand(UInt8, 64), rand(UInt8, 10))) == 64
         @test_throws ErrorException XD.hmac("MD5", UInt8[1], UInt8[2])
+    end
+end
+
+# Excel-generated fixtures with their passwords, shared by the tests below
+const FIXTURES = [
+    (joinpath(data_directory, raw"password-is-w23$er3.xlsx"), raw"w23$er3"),
+    (joinpath(data_directory, raw"password-is-very$long^password#3245301!.xlsx"), raw"very$long^password#3245301!"),
+    (joinpath(data_directory, "password-is-😀🙂🚲.xlsx"), "😀🙂🚲"),
+]
+
+function read_fixture_streams(path)
+    io = IOBuffer(read(path))
+    return XD.read_cfb_stream(io, "EncryptionInfo"), XD.read_cfb_stream(io, "EncryptedPackage")
+end
+
+@testset "Data integrity (Excel fixtures)  " begin
+    for (path, pw) in FIXTURES
+        info, pkg = read_fixture_streams(path)
+        p   = XD.parse_encryption_info(info)
+        key = XD.unwrap_package_key(pw, p)
+
+        @test p.enc_hmac_key !== nothing
+        @test XD.verify_integrity(p, key, pkg)
+
+        tampered = copy(pkg); tampered[end] ⊻= 0x01
+        @test !XD.verify_integrity(p, key, tampered)
+
+        # Re-encrypting Excel's own HMAC key must reproduce Excel's dataIntegrity
+        # fields exactly — proves encrypt_integrity matches Excel bit-for-bit.
+        hs       = XD.hash_size(p.hash_alg)
+        hmac_key = XD.aes_cbc_decrypt(key, XD.integrity_key_iv(p), p.enc_hmac_key)[1:hs]
+        @test XD.encrypt_integrity(p, key, hmac_key, pkg) == (p.enc_hmac_key, p.enc_hmac_value)
+
+        @test_throws ErrorException XD.unwrap_package_key("wrong", p)
+    end
+
+    @testset "missing <dataIntegrity>" begin
+        info, pkg = read_fixture_streams(FIXTURES[1][1])
+        xml   = replace(String(info[9:end]), r"<dataIntegrity[^>]*/>" => "")
+        p     = XD.parse_encryption_info([info[1:8]; Vector{UInt8}(xml)])
+        @test p.enc_hmac_key === nothing && p.enc_hmac_value === nothing
+        @test_throws ErrorException XD.verify_integrity(p, zeros(UInt8, 32), pkg)
+    end
+
+    @test XD.hash_size("SHA512") == 64
+    @test XD.hash_size("SHA1") == 20
+end
+
+@testset "encrypt_xlsx                     " begin
+    tmp = mktempdir()
+
+    @testset "open -> encrypted -> open (new workbook written by XLSX.jl)" begin
+        plain = joinpath(tmp, "plain.xlsx")
+        XLSX.openxlsx(plain, mode="w") do xf
+            s = xf[1]
+            s["A1"] = "hello"
+            s["B2"] = 42
+            s["C3"] = 3.25
+            s["D4"] = Date(2024, 1, 31)
+        end
+        enc = joinpath(tmp, "enc.xlsx")
+        @test XD.encrypt_xlsx(plain, enc, "s3cret!") === nothing
+        @test read(XD.decrypt_xlsx(enc, "s3cret!")) == read(plain)    # byte-identical package
+        XLSX.openxlsx(XD.decrypt_xlsx(enc, "s3cret!")) do xf
+            s = xf[1]
+            @test s["A1"] == "hello"
+            @test s["B2"] == 42
+            @test s["C3"] == 3.25
+            @test s["D4"] == Date(2024, 1, 31)
+        end
+        @test_throws ErrorException XD.decrypt_xlsx(enc, "wrong")
+    end
+
+    @testset "encrypted -> open -> encrypted -> open, on disk (Excel fixtures)" begin
+        for (i, (path, pw)) in enumerate(FIXTURES)
+            # open the Excel-encrypted file, edit it with XLSX.jl, save plaintext to disk
+            xf = XLSX.openxlsx(XD.decrypt_xlsx(path, pw), mode="rw")
+            s  = xf[1]
+            a1 = s["A1"]
+            s["E1"] = "edited after decrypt"
+            plain = joinpath(tmp, "modified_$i.xlsx")
+            XLSX.writexlsx(plain, xf, overwrite=true)
+
+            # re-encrypt on disk with a new password and open again
+            enc2 = joinpath(tmp, "reencrypted_$i.xlsx")
+            XD.encrypt_xlsx(plain, enc2, pw * "-new")
+            XLSX.openxlsx(XD.decrypt_xlsx(enc2, pw * "-new")) do f
+                @test f[1]["E1"] == "edited after decrypt"
+                @test f[1]["A1"] == a1
+                if i <= 2
+                    @test f["Sheet1"]["C1"] == "kjghfjvila"
+                    @test f["Sheet2!C3"] == "fhlAWETYUUI"
+                end
+            end
+            @test_throws ErrorException XD.decrypt_xlsx(enc2, pw)          # old password no longer works
+
+            # encrypted -> encrypted directly (decrypt result fed straight back in)
+            enc3 = joinpath(tmp, "reencrypted_again_$i.xlsx")
+            XD.encrypt_xlsx(XD.decrypt_xlsx(enc2, pw * "-new"), enc3, pw)
+            @test read(XD.decrypt_xlsx(enc3, pw)) == read(plain)
+        end
+    end
+
+    @testset "output is a well-formed Agile file" begin
+        out = IOBuffer()
+        XD.encrypt_xlsx(read(joinpath(tmp, "plain.xlsx")), out, "pw"; spin_count=1000)
+        io   = IOBuffer(take!(out))
+        info = XD.read_cfb_stream(io, "EncryptionInfo")
+        pkg  = XD.read_cfb_stream(io, "EncryptedPackage")
+        @test info[1:8] == XD.AGILE_INFO_HEADER
+        p = XD.parse_encryption_info(info)
+        @test (p.cipher_alg, p.cipher_chaining, p.hash_alg, p.key_bits) == ("AES", "ChainingModeCBC", "SHA512", 256)
+        @test (p.spin_count, p.enc_hash_alg, p.enc_key_bits) == (1000, "SHA512", 256)
+        @test length(p.key_data_salt) == 16 && length(p.enc_key_salt) == 16
+        @test XD.verify_integrity(p, XD.unwrap_package_key("pw", p), pkg)
+        @test XD.build_encryption_info(p) == info
+        for (cfb_path, blob) in XD.DATASPACES_STREAMS
+            @test XD.read_cfb_stream(io, String(last(split(cfb_path, '/')))) == blob
+        end
+    end
+
+    @testset "EncryptionInfo XML matches Excel byte-for-byte" begin
+        for (path, _) in FIXTURES
+            info, _ = read_fixture_streams(path)
+            @test XD.build_encryption_info(XD.parse_encryption_info(info)) == info
+        end
+    end
+
+    @testset "input and output forms" begin
+        plain = joinpath(tmp, "plain.xlsx")
+        bytes = read(plain)
+        for input in (plain, bytes, IOBuffer(bytes))
+            out = IOBuffer()
+            XD.encrypt_xlsx(input, out, "pw"; spin_count=10)
+            f = joinpath(tmp, "forms.xlsx")
+            write(f, take!(out))
+            @test read(XD.decrypt_xlsx(f, "pw")) == bytes
+        end
+
+        # output may overwrite the input path
+        inplace = joinpath(tmp, "inplace.xlsx")
+        cp(plain, inplace; force=true)
+        XD.encrypt_xlsx(inplace, inplace, "pw"; spin_count=10)
+        @test read(XD.decrypt_xlsx(inplace, "pw")) == bytes
+    end
+
+    @testset "fresh salts and keys every time" begin
+        bytes = read(joinpath(tmp, "plain.xlsx"))
+        o1, o2 = IOBuffer(), IOBuffer()
+        XD.encrypt_xlsx(bytes, o1, "pw"; spin_count=10)
+        XD.encrypt_xlsx(bytes, o2, "pw"; spin_count=10)
+        @test take!(o1) != take!(o2)
+    end
+
+    @testset "segment boundaries" begin
+        for n in (4, 16, 4096, 4097, 3 * 4096)
+            data = [XD.ZIP_MAGIC; rand(UInt8, n - 4)]
+            f = joinpath(tmp, "seg_$n.xlsx")
+            XD.encrypt_xlsx(data, f, "pw"; spin_count=10)
+            @test read(XD.decrypt_xlsx(f, "pw")) == data
+        end
+    end
+
+    @testset "invalid input" begin
+        @test_throws ErrorException XD.encrypt_xlsx(Vector{UInt8}("not a zip"), IOBuffer(), "pw")
+        @test_throws ErrorException XD.encrypt_xlsx(UInt8[0x50, 0x4b], IOBuffer(), "pw")
+        bytes = read(joinpath(tmp, "plain.xlsx"))
+        @test_throws ErrorException XD.encrypt_xlsx(bytes, IOBuffer(), "pw"; spin_count=-1)
+        @test_throws ErrorException XD.encrypt_xlsx(bytes, IOBuffer(), "pw"; spin_count=10_000_001)
+    end
+end
+
+@testset "DataSpaces constants match Excel " begin
+    for (path, _) in FIXTURES
+        io = IOBuffer(read(path))
+        for (cfb_path, blob) in XD.DATASPACES_STREAMS
+            @test XD.read_cfb_stream(io, String(last(split(cfb_path, '/')))) == blob
+        end
+    end
+end
+
+cfb_bytes(streams) = (io = IOBuffer(); XD.write_cfb(io, streams); take!(io))
+hdr_u32(b, off) = only(reinterpret(UInt32, b[off+1:off+4]))
+
+@testset "CFB writer                       " begin
+    @testset "round trip: sizes across the mini-stream cutoff" begin
+        sizes   = [0, 1, 63, 64, 65, 511, 512, 513, 4095, 4096, 4097, 100_000]
+        streams = ["S$(i)_$(n)" => rand(UInt8, n) for (i, n) in enumerate(sizes)]
+        bytes   = cfb_bytes(streams)
+        @test length(bytes) % 512 == 0
+        @test bytes[1:8] == XD.CFB_MAGIC
+        io = IOBuffer(bytes)
+        for (name, data) in streams
+            @test XD.read_cfb_stream(io, name) == data
+        end
+    end
+
+    @testset "nested storages" begin
+        streams = ["Top" => rand(UInt8, 10),
+                   "A/B/Deep" => rand(UInt8, 5000),
+                   "A/Mid" => rand(UInt8, 100),
+                   "A/B/C/Deeper" => UInt8[1, 2, 3]]
+        io = IOBuffer(cfb_bytes(streams))
+        for (path, data) in streams
+            @test XD.read_cfb_stream(io, String(last(split(path, '/')))) == data
+        end
+    end
+
+    @testset "large stream needs DIFAT sectors (> 109 FAT sectors)" begin
+        data  = rand(UInt8, 8 * 1024 * 1024)
+        bytes = cfb_bytes(["Big" => data, "small" => rand(UInt8, 100)])
+        @test hdr_u32(bytes, 44) > 109          # num FAT sectors
+        @test hdr_u32(bytes, 72) >= 1           # num DIFAT sectors
+        @test XD.read_cfb_stream(IOBuffer(bytes), "Big") == data
+    end
+
+    @testset "invalid input" begin
+        @test_throws ErrorException cfb_bytes(["a" => UInt8[1], "A" => UInt8[2]])   # case-insensitive duplicate
+        @test_throws ErrorException cfb_bytes(["x" * "y"^31 => UInt8[1]])           # > 31 UTF-16 units
+        @test_throws ErrorException cfb_bytes(["a//b" => UInt8[1]])                  # empty name
+        @test_throws ErrorException cfb_bytes(["s" => UInt8[1], "s/t" => UInt8[2]])  # stream used as storage
+    end
+
+    @testset "sibling trees are sorted, valid red-black trees" begin
+        # returns black-height, checking BST order and the red-black rules on the way
+        function check(entries, sid, lo, hi)
+            sid == XD.NOSTREAM && return 1
+            e = entries[sid + 1]
+            key = XD.cfb_sort_key(e)
+            @test (lo === nothing || lo < key) && (hi === nothing || key < hi)
+            if e.color == XD.CFB_RED
+                for c in (e.left, e.right)
+                    c == XD.NOSTREAM || @test entries[c + 1].color == XD.CFB_BLACK
+                end
+            end
+            bl = check(entries, e.left, lo, key)
+            br = check(entries, e.right, key, hi)
+            @test bl == br
+            return bl + (e.color == XD.CFB_BLACK)
+        end
+        for n in 1:40
+            names   = shuffle(["n$(i)" * "x"^(i % 5) for i in 1:n])
+            entries = XD.cfb_assign!(XD.cfb_build_tree(["Dir/$nm" => UInt8[] for nm in names]))
+            dir     = entries[2]
+            @test entries[dir.child + 1].color == XD.CFB_BLACK      # tree root is black
+            check(entries, dir.child, nothing, nothing)
+        end
     end
 end
