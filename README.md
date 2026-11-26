@@ -7,7 +7,7 @@ This package was written by Claude with a small amount of input from me. I do no
 
 ## Requirements
 
-* Julia v1.9 or higher
+* Julia v1.10 or higher
 
 * XLSX.jl v0.10 or higher
 
