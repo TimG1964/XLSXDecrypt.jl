@@ -60,12 +60,12 @@ const BLOCK_INTEGRITY_VALUE = UInt8[0xa0,0x67,0x7f,0x02,0xb2,0x2c,0x84,0x33]  # 
 # the final hash step), so when multiple threads are available they run
 # concurrently — spin_count is typically ~100k hash calls per key, the single
 # biggest cost of both decryption and encryption.
-function derive_keys(password::String, p)
+function derive_keys(password::String, p; threaded::Bool = Threads.nthreads() > 1)
     block_keys = (BLOCK_VERIFIER_INPUT, BLOCK_VERIFIER_HASH, BLOCK_KEY_VALUE)
     derive(bk) = derive_key(password, p.enc_key_salt, p.spin_count,
                             p.enc_hash_alg, p.enc_key_bits, bk)
 
-    keys = if Threads.nthreads() > 1
+    keys = if threaded
         fetch.([Threads.@spawn derive(bk) for bk in block_keys])
     else
         [derive(bk) for bk in block_keys]
@@ -82,6 +82,52 @@ segment_iv(hash_alg::String, salt::Vector{UInt8}, i::Integer, bs::Int) =
 # IV for a block-key-tagged value (e.g. dataIntegrity): H(keyDataSalt || blockKey)[1:block_size]
 block_iv(hash_alg::String, salt::Vector{UInt8}, block_key::Vector{UInt8}, bs::Int) =
     get_hash_fn(hash_alg)([salt; block_key])[1:bs]
+
+# ─── Password verification and package key unwrapping (§2.3.4.13) ─────────────
+
+# Check the password against the encrypted verifier and return the decrypted
+# package (intermediate) key. Errors with "Wrong password" on mismatch.
+function unwrap_package_key(password::String, p)::Vector{UInt8}
+    key_vi, key_vh, key_kv = derive_keys(password, p)
+
+    dec_vi = aes_cbc_decrypt(key_vi, p.enc_key_salt, p.enc_verifier_hash_input)
+    dec_vh = aes_cbc_decrypt(key_vh, p.enc_key_salt, p.enc_verifier_hash_value)
+
+    computed = get_hash_fn(p.enc_hash_alg)(dec_vi[1:p.enc_salt_size])
+    computed == dec_vh[1:length(computed)] ||
+        error("Wrong password (verifier mismatch)")
+
+    actual_key = aes_cbc_decrypt(key_kv, p.enc_key_salt, p.enc_key_value)
+    return actual_key[1:(p.key_bits ÷ 8)]
+end
+
+# ─── Data integrity (§2.3.4.14) ──────────────────────────────────────────────
+
+hash_size(alg::String) = length(get_hash_fn(alg)(UInt8[]))
+
+integrity_key_iv(p)   = block_iv(p.hash_alg, p.key_data_salt, BLOCK_INTEGRITY_KEY,   p.block_size)
+integrity_value_iv(p) = block_iv(p.hash_alg, p.key_data_salt, BLOCK_INTEGRITY_VALUE, p.block_size)
+
+# Build the (encryptedHmacKey, encryptedHmacValue) pair for an EncryptedPackage
+# stream `pkg` (including its 8-byte size prefix), given a random HMAC key.
+function encrypt_integrity(p, package_key::Vector{UInt8}, hmac_key::Vector{UInt8},
+                           pkg::AbstractVector{UInt8})
+    mac = hmac(p.hash_alg, hmac_key, pkg)
+    enc_key   = aes_cbc_encrypt(package_key, integrity_key_iv(p),   pad_to_block(hmac_key, p.block_size))
+    enc_value = aes_cbc_encrypt(package_key, integrity_value_iv(p), pad_to_block(mac, p.block_size))
+    return enc_key, enc_value
+end
+
+# Verify the HMAC in <dataIntegrity> against the whole EncryptedPackage stream
+# (size prefix + ciphertext, as stored). Errors if the file has no <dataIntegrity>.
+function verify_integrity(p, package_key::Vector{UInt8}, pkg::AbstractVector{UInt8})::Bool
+    (p.enc_hmac_key === nothing || p.enc_hmac_value === nothing) &&
+        error("No <dataIntegrity> element in EncryptionInfo")
+    hs       = hash_size(p.hash_alg)
+    hmac_key = aes_cbc_decrypt(package_key, integrity_key_iv(p),   p.enc_hmac_key)[1:hs]
+    expected = aes_cbc_decrypt(package_key, integrity_value_iv(p), p.enc_hmac_value)[1:hs]
+    return hmac(p.hash_alg, hmac_key, pkg) == expected
+end
 
 # ─── EncryptedPackage segment cipher (§2.3.4.15) ─────────────────────────────
 

@@ -4,12 +4,16 @@ using Nettle   # AES-CBC and HMAC (see crypto.jl)
 using SHA      # hashing for key derivation and IVs
 using XML
 using Base64
+using Random: AbstractRNG, RandomDevice   # OS CSPRNG for keys and salts
 
-export decrypt_xlsx
+export decrypt_xlsx, encrypt_xlsx
 
 include("cfb.jl")
 include("encryption_info.jl")
 include("crypto.jl")
+include("cfb_writer.jl")
+include("dataspaces.jl")
+include("encrypt.jl")
 include("key_derivation.jl")
 
 # ─── Main public function ─────────────────────────────────────────────────────
@@ -39,21 +43,8 @@ function decrypt_xlsx(path::String, password::String)::IOBuffer
     # 2. Parse encryption parameters from the XML inside EncryptionInfo
     p = parse_encryption_info(enc_info_bytes)
 
-    # 3. Derive three intermediate keys from password + encryptedKey salt
-    key_vi, key_vh, key_kv = derive_keys(password, p)
-
-    # 4. Verify the password.
-    dec_vi = aes_cbc_decrypt(key_vi, p.enc_key_salt, p.enc_verifier_hash_input)
-    dec_vh = aes_cbc_decrypt(key_vh, p.enc_key_salt, p.enc_verifier_hash_value)
-
-    computed = get_hash_fn(p.enc_hash_alg)(dec_vi[1:p.enc_salt_size])
-
-    computed == dec_vh[1:length(computed)] ||
-        error("Wrong password (verifier mismatch)")
-
-    # 5. Decrypt the actual encryption key
-    actual_key = aes_cbc_decrypt(key_kv, p.enc_key_salt, p.enc_key_value)
-    actual_key = actual_key[1:(p.key_bits ÷ 8)]
+    # 3–5. Derive password keys, verify the password, unwrap the package key
+    actual_key = unwrap_package_key(password, p)
 
     # 6. Decrypt EncryptedPackage
     #    First 8 bytes = uint64LE giving the true plaintext size
