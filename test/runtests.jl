@@ -226,3 +226,53 @@ end
         @test_throws ErrorException XD.decrypt_xlsx(test_file, "😀🙂🚗")
     end
 end
+
+@testset "Crypto primitives                " begin
+    iv = hex2bytes("000102030405060708090a0b0c0d0e0f")
+    pt = hex2bytes("6bc1bee22e409f96e93d7e117393172a")
+
+    @testset "AES-CBC known answers (NIST SP 800-38A)" begin
+        k128 = hex2bytes("2b7e151628aed2a6abf7158809cf4f3c")
+        c128 = hex2bytes("7649abac8119b246cee98e9b12e9197d")
+        @test XD.aes_cbc_encrypt(k128, iv, pt) == c128
+        @test XD.aes_cbc_decrypt(k128, iv, c128) == pt
+
+        k256 = hex2bytes("603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")
+        c256 = hex2bytes("f58c4c04d6e5f1ba779eabfb5f7bfbd6")
+        @test XD.aes_cbc_encrypt(k256, iv, pt) == c256
+        @test XD.aes_cbc_decrypt(k256, iv, c256) == pt
+    end
+
+    @testset "AES-CBC round trip, no padding" begin
+        data = rand(UInt8, 16 * 5)
+        for nbytes in (16, 24, 32)
+            key = rand(UInt8, nbytes)
+            ct  = XD.aes_cbc_encrypt(key, iv, data)
+            @test length(ct) == length(data)
+            @test XD.aes_cbc_decrypt(key, iv, ct) == data
+        end
+    end
+
+    @testset "pad_to_block" begin
+        aligned = rand(UInt8, 32)
+        @test XD.pad_to_block(aligned, 16) == aligned
+        @test XD.pad_to_block(UInt8[1, 2, 3], 16) == [UInt8[1, 2, 3]; zeros(UInt8, 13)]
+        @test XD.pad_to_block(UInt8[], 16) == UInt8[]
+    end
+
+    @testset "crypt_package round trip" begin
+        p    = (block_size = 16, hash_alg = "SHA512", key_data_salt = rand(UInt8, 16))
+        key  = rand(UInt8, 32)
+        data = rand(UInt8, 2 * XD.PACKAGE_SEGMENT_SIZE + 100)
+        ct   = XD.crypt_package(key, p, data; encrypt=true)
+        @test length(ct) == 2 * XD.PACKAGE_SEGMENT_SIZE + 112  # last segment padded to block
+        @test XD.crypt_package(key, p, ct; encrypt=false)[1:length(data)] == data
+    end
+
+    @testset "HMAC (RFC 4231 test case 2)" begin
+        mac = XD.hmac("SHA256", Vector{UInt8}("Jefe"), Vector{UInt8}("what do ya want for nothing?"))
+        @test mac == hex2bytes("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
+        @test length(XD.hmac("SHA512", rand(UInt8, 64), rand(UInt8, 10))) == 64
+        @test_throws ErrorException XD.hmac("MD5", UInt8[1], UInt8[2])
+    end
+end
