@@ -5,7 +5,11 @@ const MAX_SPIN_COUNT   = 10_000_000                       # ECMA-376 §2.3.4.10 
 
 read_input(x::AbstractString)        = read(x)
 read_input(x::AbstractVector{UInt8}) = Vector{UInt8}(x)
+# Seekable IO is read from the start (so a buffer just written by
+# XLSX.writexlsx needs no seekstart); non-seekable streams from where they are.
 read_input(x::IO)                    = read(x)
+read_input(x::IOStream)              = read(seekstart(x))
+read_input(x::IOBuffer)              = x.seekable ? read(seekstart(x)) : read(x)
 
 write_output(x::AbstractString, bytes) = (write(x, bytes); nothing)
 write_output(x::IO, bytes)             = (write(x, bytes); nothing)
@@ -56,7 +60,9 @@ Encrypts an `.xlsx` package with a password using ECMA-376 Agile Encryption
 (AES-256, SHA-512 — the same scheme and defaults Excel uses), producing a file
 Excel will open after prompting for the password.
 
-- `input`: a file path, a byte vector, or an `IO` (read from its current position).
+- `input`: a file path, a byte vector, or an `IO`. A seekable `IO` (`IOBuffer`,
+  open file) is read from the start, whatever its current position; a
+  non-seekable stream (pipe, socket) is read from its current position.
 - `output`: a file path or an `IO`. The input is read completely first, so
   `output` may be the same path as `input`.
 - `spin_count`: key-derivation iterations (Excel uses 100,000; maximum 10,000,000).
@@ -66,6 +72,11 @@ encrypt_xlsx("plain.xlsx", "protected.xlsx", "secret")
 
 # round trip
 xf = XLSX.readxlsx(decrypt_xlsx("protected.xlsx", "secret"))
+
+# encrypt a workbook straight from XLSX.jl, with no plaintext file on disk
+buf = IOBuffer()
+XLSX.writexlsx(buf, xf_writable)     # opened with mode="w"/"rw", or XLSX.newxlsx()
+encrypt_xlsx(buf, "protected.xlsx", "secret")
 ```
 """
 function encrypt_xlsx(input, output, password::AbstractString; spin_count::Integer = 100_000)
